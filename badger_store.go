@@ -10,7 +10,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/dgraph-io/badger"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/hashicorp/raft"
 )
 
@@ -35,22 +35,20 @@ type BadgerStore struct {
 // Options contains all the configuration used to open BadgerDB
 type Options struct {
 	// BadgerOptions contains any Badger-specific options
-	BadgerOptions *badger.Options
+	BadgerOptions badger.Options
 	// Path is the directory
 	Path string
 }
 
 // NewBadgerStore takes a file path and returns a connected Raft backend.
 func NewBadgerStore(path string) (*BadgerStore, error) {
-	opts := Options{Path: path, BadgerOptions: &badger.DefaultOptions}
+	opts := Options{Path: path, BadgerOptions: badger.DefaultOptions(path)}
 	return New(opts)
 }
 
 // New uses the supplied options to open a badger db and prepare it for use as a raft backend.
 func New(options Options) (*BadgerStore, error) {
-	options.BadgerOptions.Dir = options.Path + "/badger"
-	options.BadgerOptions.ValueDir = options.Path + "/badger"
-	db, err := badger.Open(*options.BadgerOptions)
+	db, err := badger.Open(options.BadgerOptions)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -134,17 +132,17 @@ func (b *BadgerStore) LastIndex() (uint64, error) {
 // GetLog is used to retrieve a log from Badger at a given index.
 func (b *BadgerStore) GetLog(idx uint64, log *raft.Log) error {
 	return b.db.View(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(fmt.Sprintf("%s%d", dbLogsPrefix, idx)))
+		item, _ := txn.Get([]byte(fmt.Sprintf("%s%d", dbLogsPrefix, idx)))
 		if item == nil {
 			return raft.ErrLogNotFound
 		}
-		v, err := item.Value()
-		if err != nil {
-			return err
-		}
-		buf := bytes.NewBuffer(v)
-		dec := gob.NewDecoder(buf)
-		return dec.Decode(&log)
+		return item.Value(func(v []byte) error {
+
+			buf := bytes.NewBuffer(v)
+			dec := gob.NewDecoder(buf)
+			return dec.Decode(&log)
+
+		})
 	})
 }
 
@@ -172,7 +170,7 @@ func (b *BadgerStore) StoreLogs(logs []*raft.Log) error {
 				return err
 			}
 		}
-		if err := txn.Commit(nil); err != nil {
+		if err := txn.Commit(); err != nil {
 			return err
 		}
 	}
@@ -230,7 +228,7 @@ func (b *BadgerStore) DeleteRange(min, max uint64) error {
 			}
 		}
 		it.Close()
-		if err := txn.Commit(nil); err != nil {
+		if err := txn.Commit(); err != nil {
 			return err
 		}
 	}
@@ -261,7 +259,7 @@ func (b *BadgerStore) Get(k []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := txn.Commit(nil); err != nil {
+	if err := txn.Commit(); err != nil {
 		return nil, err
 	}
 	return append([]byte(nil), v...), nil
